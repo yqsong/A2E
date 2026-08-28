@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://a2e.local/schemas/audit-definition-v1.schema.json",
+  "type": "object",
+  "required": ["name", "version", "description", "executor", "executor_config", "input_schema", "output_schema"],
+  "properties": {
+    "name": {"type": "string"}, "version": {"type": "string"}, "description": {"type": "string"},
+    "executor": {"type": "string", "enum": ["validator", "script", "cli", "llm"]},
+    "executor_config": {"type": "object"}, "input_schema": {"type": "object"},
+    "output_schema": {"type": "object"}, "tags": {"type": "array", "items": {"type": "string"}},
+    "deprecated": {"type": "boolean"}
+  },
+  "additionalProperties": false
+}

@@ -6,20 +6,16 @@ from collections.abc import Iterable
 
 # Client-facing plan set: overall grade + four distinct failure modes.
 # plan_correctness / reasoning_coherence remain in plan_eval.py (optional/manual).
-PLAN_METRICS = (
-    "plan_grade",
-    "plan_goal_alignment",
-    "plan_completeness",
-    "plan_constraint_adherence",
-    "plan_hallucination",
-)
+PLAN_METRICS = ("plan_structure", "plan_grade")
 
-SKILL_METRICS = ("conciseness",)
+SKILL_METRICS = ("response_compactness",)
 
-# Answer faithfulness lives under safety as `hallucination` (not a separate memory group).
+# Memory is a real, independently measured group. Missing memory contracts produce
+# an unmeasured result, never a synthetic pass.
+MEMORY_METRICS = ("memory_retention",)
+
 TOOL_METRICS = (
     "tool_hallucination",
-    "tool_invocation",
     "tool_call_count",
     "self_correction_rate",
     "tool_recall",
@@ -38,17 +34,17 @@ EFFICIENCY_METRICS = (
 )
 
 SAFETY_METRICS = (
+    "secret_exposure",
+    "authorization_boundary",
+    "prompt_injection_signals",
     "hallucination",
-    "privacy_leakage",
-    "unauthorized_action",
-    "harmful_action",
     "failure_transparency",
-    "prompt_injection_resilience",
 )
 
 METRIC_GROUPS = {
     "plan": PLAN_METRICS,
     "skill": SKILL_METRICS,
+    "memory": MEMORY_METRICS,
     "tool": TOOL_METRICS,
     "correct": CORRECT_METRICS,
     "efficiency": EFFICIENCY_METRICS,
@@ -61,8 +57,8 @@ PART_ALIASES = {
     "plans": "plan",
     "skill": "skill",
     "skills": "skill",
-    "memory": "safety",  # legacy alias: faithfulness lives under safety
-    "mem": "safety",
+    "memory": "memory",
+    "mem": "memory",
     "tool": "tool",
     "tools": "tool",
     "correct": "correct",

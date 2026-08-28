@@ -70,6 +70,14 @@ from process_values.plan_eval import (
     make_reasoning_coherence,
 )
 from process_values.skill_eval import make_conciseness
+from process_values.structural_eval import (
+    make_authorization_boundary,
+    make_memory_retention,
+    make_plan_structure,
+    make_prompt_injection_signals,
+    make_response_compactness,
+    make_secret_exposure,
+)
 from process_values.tool_eval import (
     make_self_correction_rate,
     make_tool_call_count,
@@ -103,7 +111,6 @@ LLM_METRICS = {
     "tool_approval_compliance",
     "tool_response_handling_safety",
     "tool_invocation",
-    "tool_recall",
     "tool_selection",
     "trustworthiness",
     "unauthorized_action",
@@ -241,7 +248,21 @@ def _build_evaluators(
 ) -> dict[str, Callable[..., Any]]:
     evaluators: dict[str, Callable[..., Any]] = {}
     for metric in metric_names:
-        if metric == "plan_grade":
+        if metric == "plan_structure":
+            evaluators[metric] = create_evaluator(kind="CODE", name=metric)(make_plan_structure())
+        elif metric == "response_compactness":
+            evaluators[metric] = create_evaluator(kind="CODE", name=metric)(make_response_compactness())
+        elif metric == "memory_retention":
+            evaluators[metric] = create_evaluator(kind="CODE", name=metric)(make_memory_retention())
+        elif metric == "secret_exposure":
+            evaluators[metric] = create_evaluator(kind="CODE", name=metric)(make_secret_exposure())
+        elif metric == "authorization_boundary":
+            evaluators[metric] = create_evaluator(kind="CODE", name=metric)(
+                make_authorization_boundary(spans_by_example_id)
+            )
+        elif metric == "prompt_injection_signals":
+            evaluators[metric] = create_evaluator(kind="CODE", name=metric)(make_prompt_injection_signals())
+        elif metric == "plan_grade":
             if llm is None:
                 raise ValueError("plan_grade requires an LLM; set --llm-provider and --llm-model")
             evaluators[metric] = create_evaluator(kind="LLM", name=metric)(
@@ -278,10 +299,8 @@ def _build_evaluators(
                 _make_enriching_llm_evaluator(metric, make_plan_hallucination(llm), spans_by_example_id)
             )
         elif metric == "tool_recall":
-            if llm is None:
-                raise ValueError("tool_recall requires an LLM for terminal-bench fallback")
-            evaluators[metric] = create_evaluator(kind="LLM", name=metric)(
-                make_tool_recall(spans_by_example_id, llm=llm)
+            evaluators[metric] = create_evaluator(kind="CODE", name=metric)(
+                make_tool_recall(spans_by_example_id, llm=None)
             )
         elif metric == "tool_call_count":
             evaluators[metric] = create_evaluator(kind="CODE", name=metric)(
@@ -490,6 +509,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--llm-api-key", default=os.getenv("OPENAI_API_KEY"))
     parser.add_argument("--llm-timeout", type=float, default=120.0)
     parser.add_argument("--log-level", default="INFO")
+    parser.add_argument(
+        "--audit-db",
+        default=os.getenv("A2E_AUDIT_DB_PATH", ".a2e/audit.db"),
+        help="Local SQLite audit provenance ledger.",
+    )
     return parser.parse_args()
 
 
@@ -540,14 +564,34 @@ def main() -> None:
         ",".join(selected_metrics),
         args.dry_run,
     )
-    evaluated = evaluate_experiment(
-        experiment=experiment,
-        evaluators=evaluators,
-        dry_run=args.dry_run,
-        print_summary=True,
-        timeout=args.timeout,
-        client=client,
+    from audit.ledger import AuditLedger
+
+    ledger = AuditLedger(args.audit_db)
+    audit_session_id = ledger.start_session(
+        experiment_id=experiment_id,
+        project_name=project_name,
+        source="eval/core/deal_server.py",
+        config={"metrics": selected_metrics, "dry_run": args.dry_run, "span_limit": args.span_limit},
     )
+    ledger.add_event(audit_session_id, "evaluation_started", {
+        "task_run_count": len(experiment.get("task_runs", [])),
+        "metric_names": selected_metrics,
+    })
+    try:
+        evaluated = evaluate_experiment(
+            experiment=experiment,
+            evaluators=evaluators,
+            dry_run=args.dry_run,
+            print_summary=True,
+            timeout=args.timeout,
+            client=client,
+        )
+        ledger.import_evaluation_snapshot(audit_session_id, evaluated)
+        ledger.finish_session(audit_session_id)
+    except Exception as exc:
+        ledger.add_event(audit_session_id, "evaluation_failed", {"type": type(exc).__name__, "error": str(exc)})
+        ledger.finish_session(audit_session_id, status="failed", error=f"{type(exc).__name__}: {exc}")
+        raise
     LOGGER.info("done: total evaluation runs now=%s", len(evaluated.get("evaluation_runs", [])))
 
 

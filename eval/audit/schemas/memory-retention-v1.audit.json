@@ -1,0 +1,8 @@
+{
+  "name": "memory_retention", "version": "1.0.0",
+  "description": "Compare required structured facts with the agent final state.",
+  "executor": "validator", "executor_config": {"name": "memory_retention"},
+  "input_schema": {"type": "object", "required": ["required_facts", "final_state"], "properties": {"required_facts": {"type": "object"}, "final_state": {"type": "object"}}},
+  "output_schema": {"type": "object", "required": ["audit_name", "audit_version", "status", "score", "label", "explanation", "evidence", "metadata", "error", "started_at", "ended_at"]},
+  "tags": ["memory", "deterministic"]
+}

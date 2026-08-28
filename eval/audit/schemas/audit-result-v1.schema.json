@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://a2e.local/schemas/audit-result-v1.schema.json",
+  "type": "object",
+  "required": ["audit_name", "audit_version", "status", "score", "label", "explanation", "evidence", "metadata", "error", "started_at", "ended_at"],
+  "properties": {
+    "audit_name": {"type": "string"}, "audit_version": {"type": "string"},
+    "status": {"type": "string", "enum": ["pass", "fail", "unmeasured", "error"]},
+    "score": {"type": ["number", "null"]},
+    "label": {"type": "string"}, "explanation": {"type": "string"},
+    "evidence": {"type": "object"}, "metadata": {"type": "object"},
+    "error": {"type": ["string", "null"]}, "started_at": {"type": "string"}, "ended_at": {"type": "string"}
+  },
+  "additionalProperties": false
+}

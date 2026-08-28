@@ -77,9 +77,9 @@ def make_tool_recall(
                 )[:1000]
                 return result
             return {
-                "score": 1.0,
-                "label": "no_expected_tools",
-                "explanation": "expected_actions is empty; tool recall is vacuously 1.0",
+                "score": None,
+                "label": "unmeasured",
+                "explanation": "expected_actions is empty; tool recall cannot be measured deterministically",
             }
         hits = called & expected_names
         score = len(hits) / len(expected_names)
@@ -267,13 +267,13 @@ def make_tool_hallucination(
         called = _actual_tool_names_from_spans(spans)
         if not called:
             return {
-                "score": 1.0,
-                "label": "no_tool_calls",
-                "explanation": "No actual TOOL spans were observed.",
+                "score": None,
+                "label": "unmeasured",
+                "explanation": "No actual TOOL spans were observed; hallucination is not applicable.",
             }
         if not available:
             return {
-                "score": 0.0,
+                "score": None,
                 "label": "unmeasured",
                 "explanation": "Actual TOOL spans exist, but no available tool schemas were found in LLM spans.",
             }
@@ -315,9 +315,9 @@ def make_self_correction_rate(
         error_indices = [idx for idx, call in enumerate(calls) if _is_error_result(call.get("result"))]
         if not error_indices:
             return {
-                "score": 1.0,
-                "label": "no_errors",
-                "explanation": "No tool error outputs were observed.",
+                "score": None,
+                "label": "unmeasured",
+                "explanation": "No tool error outputs were observed; self-correction was not exercised.",
             }
 
         corrected = 0
