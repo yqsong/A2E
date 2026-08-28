@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from a2e.evals.llm import LLM
+if TYPE_CHECKING:
+    from a2e.evals.llm import LLM
 
 from core.eval_common import (
     _as_dict,
@@ -21,6 +22,7 @@ from core.eval_common import (
     _text_judge,
     _tool_history_block,
 )
+from core.semantic import SemanticMatcher, alias_groups_from_config
 
 
 def make_tool_recall(
@@ -35,13 +37,13 @@ def make_tool_recall(
     ) -> dict[str, Any]:
         example_id = str(getattr(example, "id", "") or _as_dict(example).get("id") or "")
         enriched = _enrich_output(output, spans_by_example_id.get(example_id, []))
-        called = set(enriched.get("tool_calls") or [])
-        expected_names = {
-            action.get("name")
-            for action in (_as_dict(expected).get("expected_actions") or [])
-            if isinstance(action, Mapping) and action.get("name")
-        }
-        if not expected_names:
+        called_values = enriched.get("tool_calls_full") or enriched.get("tool_calls") or []
+        expected_actions = [
+            action for action in (_as_dict(expected).get("expected_actions") or [])
+            if (isinstance(action, Mapping) and (action.get("name") or action.get("action") or action.get("tool")))
+            or (isinstance(action, str) and action.strip())
+        ]
+        if not expected_actions:
             if llm is not None:
                 prompt = _build_text_prompt(
                     metric_name="tool_recall",
@@ -81,15 +83,59 @@ def make_tool_recall(
                 "label": "unmeasured",
                 "explanation": "expected_actions is empty; tool recall cannot be measured deterministically",
             }
-        hits = called & expected_names
-        score = len(hits) / len(expected_names)
+        semantic_config = (
+            _as_dict(expected).get("semantic_matching")
+            or _as_dict(input).get("semantic_matching")
+            or {}
+        )
+        matcher = SemanticMatcher(
+            alias_groups=alias_groups_from_config(_as_dict(semantic_config).get("aliases")),
+            accept_threshold=float(_as_dict(semantic_config).get("accept_threshold", 0.82)),
+            ambiguous_threshold=float(_as_dict(semantic_config).get("ambiguous_threshold", 0.38)),
+        )
+        matches = [matcher.best_match(action, called_values) for action in expected_actions]
+        accepted = [match for match in matches if match.decision == "accept"]
+        unresolved = [match for match in matches if match.decision != "accept"]
+        semantic_score = 0.0
+        fallback_used = False
+        fallback_explanation = ""
+        if unresolved and llm is not None:
+            prompt = _build_text_prompt(
+                metric_name="tool_recall_semantic_fallback",
+                definition=(
+                    "Determine what fraction of the unresolved expected operations was semantically "
+                    "covered by the observed tool calls. Treat equivalent tools and differently named "
+                    "operations as matches only when their purpose and visible arguments support it. "
+                    "SCORE may be any number from 0 to 1."
+                ),
+                choices=("complete", "incomplete"),
+                positive="complete",
+                context={
+                    "Task": _instruction(input),
+                    "Unresolved expected operations": _json_dumps([
+                        action for action, match in zip(expected_actions, matches) if match.decision != "accept"
+                    ]),
+                    "Observed tool calls": _json_dumps(called_values, limit=6000),
+                    "Deterministic semantic matches": _json_dumps([match.to_dict() for match in matches]),
+                },
+            )
+            fallback = _text_judge(llm, prompt, ("complete", "incomplete"), "complete")
+            semantic_score = min(1.0, max(0.0, float(fallback.get("score") or 0.0)))
+            fallback_used = True
+            fallback_explanation = str(fallback.get("explanation") or "")
+        score = (len(accepted) + semantic_score * len(unresolved)) / len(matches)
         return {
             "score": float(score),
             "label": "complete" if score >= 1.0 else "missed",
             "explanation": (
-                f"called={sorted(called)}; expected={sorted(expected_names)}; "
-                f"hit={sorted(hits)}; recall={score:.3f}"
+                f"deterministic={len(accepted)}/{len(matches)}; unresolved={len(unresolved)}; "
+                f"llm_fallback={fallback_used}; recall={score:.3f}; {fallback_explanation}"
             ),
+            "metadata": {
+                "semantic_matches": [match.to_dict() for match in matches],
+                "llm_fallback_used": fallback_used,
+                "llm_fallback_score": semantic_score if fallback_used else None,
+            },
         }
 
     tool_recall.__name__ = "tool_recall"

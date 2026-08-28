@@ -10,9 +10,10 @@ import json
 import logging
 import re
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from a2e.evals.llm import LLM
+if TYPE_CHECKING:
+    from a2e.evals.llm import LLM
 
 LOGGER = logging.getLogger("a2e_eval_common")
 

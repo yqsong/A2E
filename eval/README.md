@@ -143,6 +143,37 @@ python -m audit.cli --db .a2e/audit.db run \
 The default metric groups now prefer deterministic code metrics. Planning keeps
 one LLM grade alongside a structural plan check; safety keeps only the two
 high-level semantic judges (`hallucination` and `failure_transparency`) and uses
-deterministic validators for secret exposure, authorization evidence, and prompt
-injection signals. Memory is a real independent metric group. Missing evidence
+deterministic or hybrid validators for secret exposure, authorization evidence,
+and prompt injection signals. Memory is a real independent metric group. Missing evidence
 returns `score=null, label=unmeasured`, never a synthetic passing score.
+
+## Hybrid semantic matching
+
+`tool_recall` and `authorization_boundary` use a three-stage semantic layer:
+
+1. normalized exact names and configured aliases are resolved deterministically;
+2. conservative token/description similarity produces an explicit confidence score;
+3. unresolved matches are sent to the configured LLM with the task, arguments,
+   and action contract as context.
+
+Each result records `semantic_matches`, the matching method and score, and whether
+an LLM fallback was used. This keeps common cases reproducible while allowing new
+datasets and harnesses to use semantically equivalent tool names.
+
+Datasets can extend aliases without changing evaluator code:
+
+```json
+{
+  "semantic_matching": {
+    "aliases": {
+      "find_account": ["lookup_customer", "search_profile"]
+    },
+    "accept_threshold": 0.82,
+    "ambiguous_threshold": 0.38
+  }
+}
+```
+
+Aliases should express equivalent capabilities, not merely related actions. In
+particular, authorization matching still asks the LLM to consider target, scope,
+arguments, and destructive effect before accepting an unresolved action.

@@ -122,6 +122,10 @@ LLM_METRICS = {
     "plan_completeness",
     "plan_constraint_adherence",
     "plan_hallucination",
+    # Hybrid metric: deterministic semantic matching handles confident cases;
+    # the LLM is called only for unresolved operations.
+    "tool_recall",
+    "authorization_boundary",
 }
 
 
@@ -257,8 +261,8 @@ def _build_evaluators(
         elif metric == "secret_exposure":
             evaluators[metric] = create_evaluator(kind="CODE", name=metric)(make_secret_exposure())
         elif metric == "authorization_boundary":
-            evaluators[metric] = create_evaluator(kind="CODE", name=metric)(
-                make_authorization_boundary(spans_by_example_id)
+            evaluators[metric] = create_evaluator(kind="LLM" if llm is not None else "CODE", name=metric)(
+                make_authorization_boundary(spans_by_example_id, llm=llm)
             )
         elif metric == "prompt_injection_signals":
             evaluators[metric] = create_evaluator(kind="CODE", name=metric)(make_prompt_injection_signals())
@@ -299,8 +303,8 @@ def _build_evaluators(
                 _make_enriching_llm_evaluator(metric, make_plan_hallucination(llm), spans_by_example_id)
             )
         elif metric == "tool_recall":
-            evaluators[metric] = create_evaluator(kind="CODE", name=metric)(
-                make_tool_recall(spans_by_example_id, llm=None)
+            evaluators[metric] = create_evaluator(kind="LLM" if llm is not None else "CODE", name=metric)(
+                make_tool_recall(spans_by_example_id, llm=llm)
             )
         elif metric == "tool_call_count":
             evaluators[metric] = create_evaluator(kind="CODE", name=metric)(
