@@ -2,19 +2,32 @@
 
 **Multi-agent** τ-bench runner powered by LangGraph + LangChain.
 
-Three logical agents arranged in a small state graph:
+Four logical agents arranged in a reasoning-controlled state graph:
 
 ```
-┌────────┐    ┌──────────┐    ┌───────────┐
-│ ROUTER │───▶│ EXECUTOR │───▶│ RESPONDER │
-└────────┘    └──────────┘    └───────────┘
-     ▲              │
-     └──── loop ────┘   (until done or max turns)
+┌────────┐    ┌──────────┐    ┌─────────────────┐    ┌───────────┐
+│ ROUTER │───▶│ EXECUTOR │───▶│ COMPLETION GATE │───▶│ RESPONDER │
+└────────┘    └──────────┘    └─────────────────┘    └───────────┘
+     ▲              │                  │
+     └──── loop ────┘                  └── bounded re-plan ──▶ ROUTER
 ```
 
 Each node is wrapped in an explicit OpenInference ``AGENT`` span so the A2E
 UI surfaces "Router → Executor → Responder" as separate agents within a
 single task trace.
+
+## Meta-reasoning control plane
+
+Before execution, the task-core package builds a dataset-agnostic `CaseModel`
+from the instruction and visible tool schemas. It estimates side-effect intent,
+constraints, entities, tool ambiguity, risk, complexity, and a reasoning mode.
+It never reads benchmark `expected_actions`.
+
+When the router proposes termination, the completion gate checks observable
+progress. A high-confidence state-changing request with only read/query calls,
+or a failed mutation without recovery, receives one additional re-planning
+pass. The bounded pass prevents infinite reflection loops and still permits a
+well-evidenced refusal when an action is invalid, unsafe, or impossible.
 
 ## LLM provider
 

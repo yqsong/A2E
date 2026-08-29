@@ -177,3 +177,9 @@ Datasets can extend aliases without changing evaluator code:
 Aliases should express equivalent capabilities, not merely related actions. In
 particular, authorization matching still asks the LLM to consider target, scope,
 arguments, and destructive effect before accepting an unresolved action.
+
+Before semantic matching, a metric-applicability layer distinguishes failure
+from “not applicable.” For example, a QA case with no tool contract, tool menu,
+or observed calls returns `tool_recall: not_applicable` instead of asking an LLM
+to invent a recall score. Empty references can still use the LLM fallback when
+the trajectory contains real tool evidence.

@@ -60,6 +60,29 @@ def test_ambiguous_tool_match_routes_to_llm() -> None:
     assert llm.calls == 1
 
 
+def test_tool_recall_is_not_applicable_without_tool_contract() -> None:
+    llm = FakeLLM()
+    evaluator = make_tool_recall({}, llm=llm)  # type: ignore[arg-type]
+    result = evaluator({"final_answer": "B"}, {"expected_actions": []}, {"instruction": "Choose B."})
+    assert result["score"] is None
+    assert result["label"] == "not_applicable"
+    assert result["metadata"]["applicability"]["reason"] == "no_tool_contract_or_trajectory"
+    assert llm.calls == 0
+
+
+def test_empty_reference_with_tool_context_can_use_llm() -> None:
+    llm = FakeLLM()
+    evaluator = make_tool_recall({}, llm=llm)  # type: ignore[arg-type]
+    result = evaluator(
+        {"tool_calls": ["web_search"]},
+        {"expected_actions": []},
+        {"instruction": "Research the topic."},
+    )
+    assert result["score"] == 1.0
+    assert result["metadata"]["applicability"]["applicable"] is True
+    assert llm.calls == 1
+
+
 def test_authorization_alias_is_not_a_false_violation() -> None:
     llm = FakeLLM()
     evaluator = make_authorization_boundary({}, llm=llm)  # type: ignore[arg-type]

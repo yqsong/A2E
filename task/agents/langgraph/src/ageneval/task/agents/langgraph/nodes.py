@@ -20,7 +20,7 @@ from typing import Any
 from openinference.semconv.trace import OpenInferenceSpanKindValues, SpanAttributes
 from opentelemetry import trace as trace_api
 
-from ageneval.task.core import AgentBinding, TaskInput
+from ageneval.task.core import AgentBinding, TaskInput, assess_progress
 from ageneval.task.core.native_tools import clip_for_model, openai_tool_dicts, unwrap_tool_kwargs
 
 logger = logging.getLogger(__name__)
@@ -55,6 +55,8 @@ def router_node(*, state: dict[str, Any], llm: Any, binding: AgentBinding) -> di
             history=history,
             tool_names=tool_names,
             native_tools=bool(tool_dicts),
+            case_model=state.get("case_model"),
+            meta_feedback=str(state.get("meta_feedback") or ""),
         )
 
         reply_text, native_calls = _invoke_llm_native(llm, system, user, tool_dicts, span)
@@ -78,6 +80,39 @@ def router_node(*, state: dict[str, Any], llm: Any, binding: AgentBinding) -> di
             return {"final_answer": reply_text.strip(), "next_action": None}
         logger.warning("router got unstructured reply, terminating")
         return {"final_answer": "(no answer)", "next_action": None}
+
+
+def completion_gate_node(*, state: dict[str, Any], max_turns: int) -> dict[str, Any]:
+    """Validate a proposed termination against observable goal progress.
+
+    The gate is deliberately bounded to one re-planning pass. It never reads
+    benchmark reference actions and therefore cannot leak the gold trajectory.
+    """
+    assessment = assess_progress(
+        state.get("case_model") or {},
+        state.get("tool_calls") or [],
+        completion_checks=int(state.get("completion_checks", 0)),
+        turns=int(state.get("turns", 0)),
+        max_turns=max_turns,
+    )
+    with _tracer.start_as_current_span("agent.completion_gate") as span:
+        span.set_attribute(_AGENT_KIND_KEY, _AGENT_KIND_VAL)
+        span.set_attribute("agent.name", "completion_gate")
+        span.set_attribute("a2e.termination_ready", assessment.termination_ready)
+        span.set_attribute("a2e.meta_reason", assessment.reason)
+        span.set_attribute("a2e.diagnostic_sufficiency", assessment.diagnostic_sufficiency)
+    if assessment.termination_ready:
+        return {
+            "progress_assessment": assessment.to_dict(),
+            "meta_feedback": "",
+        }
+    return {
+        "final_answer": None,
+        "next_action": None,
+        "completion_checks": int(state.get("completion_checks", 0)) + 1,
+        "progress_assessment": assessment.to_dict(),
+        "meta_feedback": assessment.feedback,
+    }
 
 
 def executor_run(*, state: dict[str, Any], binding: AgentBinding) -> dict[str, Any]:
@@ -304,15 +339,25 @@ def _router_user_prompt(
     history: list[dict[str, Any]],
     tool_names: list[str] | None = None,
     native_tools: bool = False,
+    case_model: Any = None,
+    meta_feedback: str = "",
 ) -> str:
     available = ", ".join(tool_names or []) or "(none)"
     state_for_prompt = _public_state(task.initial_state)
     history_for_prompt = _public_history(history)
+    case_block = json.dumps(case_model, default=str) if case_model else "(not classified)"
+    control_block = (
+        f"Reasoning control feedback: {meta_feedback}\n"
+        if meta_feedback
+        else ""
+    )
     if native_tools:
         return (
             f"Task: {task.instruction}\n"
             f"Initial state: {json.dumps(state_for_prompt, default=str)}\n"
             f"History so far: {json.dumps(history_for_prompt, default=str)}\n"
+            f"Case abstraction: {case_block}\n"
+            f"{control_block}"
             f"Available tools: {available}\n"
             "Call a tool via the function-calling interface with its named arguments. "
             "Do not emit a JSON action object as plain text and do not wrap "
@@ -328,6 +373,8 @@ def _router_user_prompt(
         f"Task: {task.instruction}\n"
         f"Initial state: {json.dumps(state_for_prompt, default=str)}\n"
         f"History so far: {json.dumps(history_for_prompt, default=str)}\n"
+        f"Case abstraction: {case_block}\n"
+        f"{control_block}"
         f"Available action names: {available}\n"
         f"{tool_policy}"
         "Return exactly one JSON object with no prose or Markdown.\n"

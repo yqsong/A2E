@@ -16,7 +16,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from ageneval.task.core import AgentBinding, AgentRunner, TaskInput, TaskTrace, ToolCall
+from ageneval.task.core import AgentBinding, AgentRunner, TaskInput, TaskTrace, ToolCall, build_case_model
 from ageneval.task.core.budget import llm_timeout, max_tokens, max_turns
 
 from ageneval.task.agents.langgraph.graph import build_tau_graph
@@ -70,6 +70,7 @@ class LangGraphAgent(AgentRunner):
         llm = ChatOpenAI(**llm_kwargs)
 
         graph = build_tau_graph(llm=llm, binding=self.binding, max_turns=self.max_turns)
+        case_model = build_case_model(task, self.binding)
 
         start = time.perf_counter()
         try:
@@ -80,6 +81,9 @@ class LangGraphAgent(AgentRunner):
                     "tool_calls": [],
                     "final_answer": None,
                     "turns": 0,
+                    "case_model": case_model.to_dict(),
+                    "completion_checks": 0,
+                    "meta_feedback": "",
                 }
             )
         except Exception as exc:  # noqa: BLE001
@@ -118,6 +122,10 @@ class LangGraphAgent(AgentRunner):
             tool_calls=tool_calls,
             final_answer=final_answer,
             elapsed_seconds=elapsed,
+            raw={
+                "case_model": case_model.to_dict(),
+                "progress_assessment": final_state.get("progress_assessment") or {},
+            },
         )
 
 

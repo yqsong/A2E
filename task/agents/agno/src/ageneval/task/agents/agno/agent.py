@@ -20,7 +20,15 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from ageneval.task.core import AgentBinding, AgentRunner, TaskInput, TaskTrace, ToolCall
+from ageneval.task.core import (
+    AgentBinding,
+    AgentRunner,
+    TaskInput,
+    TaskTrace,
+    ToolCall,
+    assess_progress,
+    build_case_model,
+)
 
 # Unified model: default to .env's A2E_MODEL (a non-reasoning instruct model);
 # fall back to qwen-plus.
@@ -122,6 +130,7 @@ class AgnoAgent(AgentRunner):
                 )
 
             assert self.binding is not None  # for type-checkers
+            case_model = build_case_model(task, self.binding)
             model = OpenAILike(
                 id=self.model,
                 api_key=api_key,
@@ -138,7 +147,15 @@ class AgnoAgent(AgentRunner):
                 name="a2e_agent",
                 model=model,
                 tools=tools,
-                instructions=self.binding.render_system_prompt() + _NATIVE_TOOL_HINT,
+                instructions=(
+                    self.binding.render_system_prompt()
+                    + _NATIVE_TOOL_HINT
+                    + "\n\nReasoning control: "
+                    + json.dumps(case_model.to_dict(), ensure_ascii=False)
+                    + "\nBefore producing a final answer, reconcile the requested outcomes against "
+                    "successful tool effects. Information gathering alone does not complete a "
+                    "state-changing request."
+                ),
                 tool_call_limit=self.max_turns,
             )
 
@@ -190,6 +207,84 @@ class AgnoAgent(AgentRunner):
             elif result is not None:
                 final = str(result).strip()
 
+            progress = assess_progress(
+                case_model,
+                [
+                    {
+                        "name": call.name,
+                        "arguments": dict(call.arguments),
+                        "result": call.result if call.error is None else {"error": call.error},
+                    }
+                    for call in recorder
+                ],
+                completion_checks=0,
+                turns=len(recorder),
+                max_turns=self.max_turns,
+            )
+            if not progress.termination_ready:
+                remaining = max(1.0, self.run_deadline - (time.perf_counter() - start))
+                recovery_prompt = (
+                    f"Original task: {task.instruction}\n"
+                    "Observed tool calls so far: "
+                    + json.dumps(
+                        [
+                            {"name": call.name, "arguments": dict(call.arguments), "result": call.result}
+                            for call in recorder
+                        ],
+                        ensure_ascii=False,
+                        default=str,
+                    )
+                    + "\nMeta-diagnosis: "
+                    + progress.feedback
+                    + "\nContinue from the current environment state. Do not repeat successful actions. "
+                    "Return a final answer only after this diagnostic pass."
+                )
+                try:
+                    result = await asyncio.wait_for(
+                        asyncio.to_thread(agent.run, recovery_prompt),
+                        timeout=remaining,
+                    )
+                except asyncio.TimeoutError:
+                    return TaskTrace(
+                        task_id=task.task_id,
+                        agent_name=self.name,
+                        status="timeout",
+                        turns=len(recorder),
+                        tool_calls=tuple(recorder),
+                        final_answer=final or None,
+                        elapsed_seconds=time.perf_counter() - start,
+                        error="meta-reasoning recovery exceeded the remaining run deadline",
+                        raw={"case_model": case_model.to_dict(), "progress_assessment": progress.to_dict()},
+                    )
+                run_error = _run_error(result)
+                if run_error is not None:
+                    return TaskTrace(
+                        task_id=task.task_id,
+                        agent_name=self.name,
+                        status="error",
+                        turns=len(recorder),
+                        tool_calls=tuple(recorder),
+                        elapsed_seconds=time.perf_counter() - start,
+                        error=run_error[:1000],
+                        raw={"case_model": case_model.to_dict(), "progress_assessment": progress.to_dict()},
+                    )
+                content = getattr(result, "content", None)
+                final = str(content if content is not None else result or "").strip()
+                progress = assess_progress(
+                    case_model,
+                    [
+                        {
+                            "name": call.name,
+                            "arguments": dict(call.arguments),
+                            "result": call.result if call.error is None else {"error": call.error},
+                        }
+                        for call in recorder
+                    ],
+                    completion_checks=1,
+                    turns=len(recorder),
+                    max_turns=self.max_turns,
+                )
+
             turns = _count_turns(result) or len(recorder)
             return TaskTrace(
                 task_id=task.task_id,
@@ -199,6 +294,7 @@ class AgnoAgent(AgentRunner):
                 tool_calls=tuple(recorder),
                 final_answer=final or None,
                 elapsed_seconds=time.perf_counter() - start,
+                raw={"case_model": case_model.to_dict(), "progress_assessment": progress.to_dict()},
             )
         except Exception as exc:
             # Broad catch: surface any SDK / network / parsing failure as an

@@ -22,6 +22,7 @@ from core.eval_common import (
     _text_judge,
     _tool_history_block,
 )
+from core.applicability import tool_metric_applicability
 from core.semantic import SemanticMatcher, alias_groups_from_config
 
 
@@ -44,15 +45,24 @@ def make_tool_recall(
             or (isinstance(action, str) and action.strip())
         ]
         if not expected_actions:
+            applicability = tool_metric_applicability(enriched, _as_dict(expected), _as_dict(input))
+            if applicability.applicable is False:
+                return {
+                    "score": None,
+                    "label": "not_applicable",
+                    "explanation": (
+                        "tool_recall is not applicable: " + applicability.reason
+                    ),
+                    "metadata": {"applicability": applicability.to_dict()},
+                }
             if llm is not None:
                 prompt = _build_text_prompt(
                     metric_name="tool_recall",
                     definition=(
-                        "For this terminal-bench task, judge whether the agent's tool usage "
-                        "covered the necessary operations to solve the task. Consider whether "
-                        "it inspected relevant files, edited or created required artifacts, ran "
-                        "appropriate verification commands, handled tool errors, and avoided "
-                        "stopping before the task was complete."
+                        "Judge whether the agent's observed tool usage covered the operations "
+                        "necessary for this specific task and domain. Do not assume files, shell "
+                        "commands, or tool use are required unless the task and available-tool "
+                        "evidence support that conclusion."
                     ),
                     choices=("complete", "incomplete"),
                     positive="complete",
@@ -70,6 +80,7 @@ def make_tool_recall(
                         "Tools called": _json_dumps(enriched.get("tool_calls") or []),
                         "Tool history": _tool_history_block(enriched) or "(no tool calls)",
                         "Final answer": _final_answer(enriched),
+                        "Applicability evidence": _json_dumps(applicability.to_dict()),
                     },
                 )
                 result = _text_judge(llm, prompt, ("complete", "incomplete"), "complete")
@@ -77,6 +88,7 @@ def make_tool_recall(
                     "expected_actions is empty; used LLM trajectory judge fallback. "
                     + str(result.get("explanation") or "")
                 )[:1000]
+                result["metadata"] = {"applicability": applicability.to_dict()}
                 return result
             return {
                 "score": None,
